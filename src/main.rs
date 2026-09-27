@@ -9,7 +9,8 @@ use std::{
 use clap::Parser;
 
 use crossterm::{
-    QueueableCommand, cursor,
+    QueueableCommand,
+    cursor::{self, MoveToRow},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers, poll, read},
     execute,
     terminal::{self, Clear, EnterAlternateScreen, LeaveAlternateScreen, size},
@@ -73,16 +74,18 @@ impl Oxed {
     }
 
     // TODO Rework this
-    fn render_base_screen() -> io::Result<()> {
+    fn render_base_screen(buf: &Buffer) -> io::Result<()> {
         // Preparing alternate screen
         let mut handle = io::stdout();
         let screen_size = size()?;
 
         crossterm::terminal::enable_raw_mode()?;
         handle.queue(EnterAlternateScreen)?;
-        handle.queue(cursor::MoveTo(screen_size.0 / 2, screen_size.1 / 2))?;
-        handle.write_all(b"test alternative screen")?;
-        handle.queue(cursor::MoveTo(0, screen_size.1))?;
+        // handle.queue(cursor::MoveTo(screen_size.0 / 2, screen_size.1 / 2))?;
+        // handle.write_all(b"test alternative screen")?;
+        // handle.queue(cursor::MoveTo(0, screen_size.1))?;
+
+        View::render(buf, screen_size)?;
 
         // flushing only when its necessary
         io::stdout().flush()?;
@@ -92,7 +95,7 @@ impl Oxed {
 
     pub fn run(&mut self) -> io::Result<()> {
         // Rework this
-        Self::render_base_screen()?;
+        Self::render_base_screen(&self.buffer)?;
 
         loop {
             let event = self.terminal.read_event();
@@ -120,7 +123,7 @@ impl Oxed {
                 match self.mode {
                     Mode::Normal => {
                         // Here we should handle any keypress as a keyshortcut
-                        println!("Handle keyr shortcuts");
+                        // println!("Handle keyr shortcuts");
                         match key.code {
                             // KeyCode::Up | KeyCode::Char('z') => TerminalEvent::MoveUp(1),
                             // KeyCode::Down | KeyCode::Char('s') => TerminalEvent::MoveDown(1),
@@ -135,7 +138,9 @@ impl Oxed {
                                 // TODO add the stdout handle to oxed struct to simplify testing
                                 return State::Stop;
                             }
-                            _ => eprintln!("Unhandled keybind"),
+                            _ => {
+                                let _res = View::render_error("Unhandled keybind");
+                            }
                         }
                     }
                     Mode::Insert => {
@@ -143,14 +148,14 @@ impl Oxed {
                         println!("Handle key press as user input");
                     }
                 }
-                println!("Handle key press event");
+                // println!("Handle key press event");
             }
             OxedEvent::Resize(width, height) => {
-                println!("INFO Resize event [{width},{height}]");
+                // println!("INFO Resize event [{width},{height}]");
             }
             OxedEvent::Tick => {
                 // Later we can handle routines in there
-                println!("INFO: Tick received");
+                // println!("INFO: Tick received");
             }
         }
 
@@ -224,6 +229,53 @@ impl Terminal {
         }
 
         OxedEvent::Tick
+    }
+}
+
+struct View;
+
+impl View {
+    pub fn render(buffer: &Buffer, size: (u16, u16)) -> io::Result<()> {
+        let mut handle = io::stdout();
+
+        handle.queue(cursor::MoveTo(0, 0))?;
+
+        println!(
+            "Nombre de lignes: {}\nHauteur du terminal: {}",
+            buffer.content.len(),
+            usize::from(size.1)
+        );
+        if let Some(lines) = buffer
+            .content
+            .get(0..std::cmp::min(usize::from(size.1), buffer.content.len()))
+        {
+            println!("there is some lines ! ");
+            for line in lines {
+                handle.write_all(line.as_bytes())?;
+                handle.queue(cursor::MoveToNextLine(1))?;
+            }
+        }
+
+        handle.queue(cursor::MoveTo(0, 0))?;
+        handle.flush()?;
+
+        Ok(())
+    }
+
+    // TODO Erase previous text before writing the message
+    /// Render the message on the terminal last line
+    pub fn render_error(msg: &str) -> io::Result<()> {
+        let mut handle = io::stdout();
+
+        let size = terminal::size()?;
+
+        handle.queue(MoveToRow(size.1))?;
+
+        handle.write_all(msg.as_bytes())?;
+
+        handle.flush()?;
+
+        Ok(())
     }
 }
 
