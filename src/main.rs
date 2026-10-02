@@ -7,11 +7,7 @@ use std::{
 
 use clap::Parser;
 
-use crossterm::{
-    QueueableCommand,
-    event::{KeyCode, KeyEvent},
-    terminal::{Clear, EnterAlternateScreen, LeaveAlternateScreen, size},
-};
+use crossterm::event::{KeyCode, KeyEvent};
 
 mod buffer;
 mod terminal;
@@ -81,14 +77,9 @@ impl Oxed {
     // TODO Rework this
     fn render_base_screen(buf: &Buffer) -> io::Result<()> {
         // Preparing alternate screen
-        let mut handle = io::stdout();
-        let screen_size = size()?;
+        let screen_size = Terminal::size()?;
 
-        crossterm::terminal::enable_raw_mode()?;
-        handle.queue(EnterAlternateScreen)?;
-        // handle.queue(cursor::MoveTo(screen_size.0 / 2, screen_size.1 / 2))?;
-        // handle.write_all(b"test alternative screen")?;
-        // handle.queue(cursor::MoveTo(0, screen_size.1))?;
+        Terminal::open()?;
 
         View::render(buf, screen_size)?;
 
@@ -113,7 +104,7 @@ impl Oxed {
                 }
 
                 State::Stop => {
-                    Self::quit()?;
+                    Terminal::close()?;
                     return Ok(());
                 }
             }
@@ -165,14 +156,6 @@ impl Oxed {
         }
 
         State::Running
-    }
-
-    fn quit() -> io::Result<()> {
-        crossterm::terminal::disable_raw_mode()?;
-        io::stdout().queue(LeaveAlternateScreen)?;
-        io::stdout().write_all(b"Leaving oxed...")?;
-        io::stdout().flush()?;
-        Ok(())
     }
 }
 

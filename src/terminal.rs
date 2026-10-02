@@ -1,6 +1,8 @@
 use crate::OxedEvent;
+use crossterm::QueueableCommand;
+use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{event, terminal};
-use std::io;
+use std::io::{self, Write};
 use std::time::Duration;
 
 pub struct Terminal {
@@ -28,5 +30,21 @@ impl Terminal {
 
     pub fn size() -> io::Result<(u16, u16)> {
         terminal::size()
+    }
+
+    pub fn open() -> io::Result<()> {
+        crossterm::terminal::enable_raw_mode()?;
+        io::stdout().queue(EnterAlternateScreen)?;
+        io::stdout().queue(Clear(ClearType::All))?;
+
+        Ok(())
+    }
+
+    pub fn close() -> io::Result<()> {
+        crossterm::terminal::disable_raw_mode()?;
+        io::stdout().queue(LeaveAlternateScreen)?;
+        io::stdout().write_all(b"Leaving oxed...")?;
+        io::stdout().flush()?;
+        Ok(())
     }
 }
