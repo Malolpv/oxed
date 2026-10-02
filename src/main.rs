@@ -10,11 +10,14 @@ use clap::Parser;
 
 use crossterm::{
     QueueableCommand,
-    cursor::{self, MoveToRow},
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, poll, read},
-    execute,
+    cursor::{self},
+    event::{self, KeyCode, KeyEvent},
     terminal::{self, Clear, EnterAlternateScreen, LeaveAlternateScreen, size},
 };
+
+mod buffer;
+
+use crate::buffer::Buffer;
 
 #[derive(Parser, Debug)]
 #[command(name = "oxed")]
@@ -242,14 +245,13 @@ impl View {
 
         println!(
             "Nombre de lignes: {}\nHauteur du terminal: {}",
-            buffer.content.len(),
+            buffer.len(),
             usize::from(size.1)
         );
         if let Some(lines) = buffer
-            .content
-            .get(0..std::cmp::min(usize::from(size.1), buffer.content.len()))
+            .content()
+            .get(0..std::cmp::min(usize::from(size.1), buffer.len()))
         {
-            println!("there is some lines ! ");
             for line in lines {
                 handle.write_all(line.as_bytes())?;
                 handle.queue(cursor::MoveToNextLine(1))?;
@@ -262,14 +264,19 @@ impl View {
         Ok(())
     }
 
-    // TODO Erase previous text before writing the message
     /// Render the message on the terminal last line
     pub fn render_error(msg: &str) -> io::Result<()> {
         let mut handle = io::stdout();
 
         let size = terminal::size()?;
+        let pos = cursor::position()?;
 
-        handle.queue(MoveToRow(size.1))?;
+        // Move the cursor to bottom row
+        if pos.1 != size.1 || pos.0 != 0 {
+            handle.queue(cursor::MoveTo(0, size.1))?;
+        }
+
+        handle.queue(Clear(terminal::ClearType::CurrentLine))?;
 
         handle.write_all(msg.as_bytes())?;
 
@@ -277,162 +284,4 @@ impl View {
 
         Ok(())
     }
-}
-
-struct Buffer {
-    content: Vec<String>,
-}
-
-impl Buffer {
-    pub fn new(input: impl std::io::BufRead) -> Self {
-        let mut content: Vec<String> = vec![];
-
-        for line in input.lines() {
-            if let Ok(line) = line {
-                content.push(line);
-            } else {
-                eprintln!("Error while reading line from input");
-            }
-        }
-
-        Self { content }
-    }
-
-    pub const fn empty() -> Self {
-        Self { content: vec![] }
-    }
-
-    pub const fn len(&self) -> usize {
-        self.content.len()
-    }
-
-    pub fn line(&self, index: usize) -> Option<&String> {
-        self.content.get(index)
-    }
-}
-
-#[cfg(test)]
-mod buffer_tests {
-    use std::io::Cursor;
-
-    use super::Buffer;
-
-    #[test]
-    fn test_buffer_empty() {
-        let cursor = Cursor::new("");
-
-        let buf = Buffer::new(cursor);
-
-        assert_eq!(buf.len(), 0);
-    }
-
-    #[test]
-    fn test_buffer_from_cursor() {
-        let cursor = std::io::Cursor::new("line 1\nline 2\nline 3");
-
-        let buf = Buffer::new(cursor);
-
-        assert_eq!(buf.len(), 3);
-        assert_eq!(buf.line(0), Some(&String::from("line 1")));
-        assert_eq!(buf.line(2), Some(&String::from("line 3")));
-    }
-
-    #[test]
-    fn test_line_out_of_bounds() {
-        let cursor = std::io::Cursor::new("");
-
-        let buf = Buffer::new(cursor);
-
-        assert_eq!(buf.line(99), None);
-    }
-
-    #[test]
-    fn test_create_empty_buffer() {
-        let buf = Buffer::empty();
-        assert_eq!(buf.len(), 0);
-    }
-}
-
-fn handle_key_event(e: KeyEvent) -> io::Result<State> {
-    let mut handle = io::stdout();
-
-    let buf = format!("{e:?}");
-
-    // Perform actions on press only
-    if e.is_press() {
-        match e.code {
-            KeyCode::Esc => {
-                // Escape key has been pressed so we can notify the program to leave the alternate screen
-                execute!(handle, LeaveAlternateScreen)?;
-                return Ok(State::Stop);
-            }
-
-            code @ (KeyCode::Left | KeyCode::Down | KeyCode::Up | KeyCode::Right) => {
-                if let Some(direction) = Direction::from_keycode(code) {
-                    move_cursor(&direction)?;
-                }
-            }
-
-            _ => {
-                handle.queue(Clear(terminal::ClearType::All))?;
-                handle.queue(cursor::RestorePosition)?;
-                handle.write_all(&buf.into_bytes())?;
-            }
-        }
-    }
-
-    handle.flush()?;
-
-    Ok(State::Running)
-}
-
-enum Direction {
-    Up,
-    Down,
-    Left,
-    Right,
-}
-
-impl Direction {
-    pub const fn from_keycode(key_code: KeyCode) -> Option<Self> {
-        match key_code {
-            KeyCode::Up => Some(Self::Up),
-            KeyCode::Down => Some(Self::Down),
-            KeyCode::Left => Some(Self::Left),
-            KeyCode::Right => Some(Self::Right),
-            _ => None,
-        }
-    }
-}
-
-fn move_cursor(direction: &Direction) -> io::Result<()> {
-    let mut handle = io::stdout();
-
-    let t_size = size()?;
-    let position = cursor::position()?;
-
-    match direction {
-        Direction::Up => {
-            if position.1 > 0 {
-                handle.queue(cursor::MoveUp(1))?;
-            }
-        }
-        Direction::Down => {
-            if position.1 < t_size.1 {
-                handle.queue(cursor::MoveDown(1))?;
-            }
-        }
-        Direction::Left => {
-            if position.0 > 0 {
-                handle.queue(cursor::MoveLeft(1))?;
-            }
-        }
-        Direction::Right => {
-            if position.0 < t_size.0 {
-                handle.queue(cursor::MoveRight(1))?;
-            }
-        }
-    }
-
-    Ok(())
 }
