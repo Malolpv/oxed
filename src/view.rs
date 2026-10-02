@@ -36,7 +36,8 @@ impl View {
     pub fn render_error(msg: &str) -> io::Result<()> {
         let mut handle = io::stdout();
 
-        let size = Terminal::size()?;
+        //TODO Maybe View also need to get the writer type as generic ?
+        let size = Terminal::<io::Stdout>::size()?;
         let pos = cursor::position()?;
 
         // Move the cursor to bottom row

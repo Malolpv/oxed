@@ -5,15 +5,19 @@ use crossterm::{event, terminal};
 use std::io::{self, Write};
 use std::time::Duration;
 
-pub struct Terminal {
+pub struct Terminal<W: Write> {
     polling_rate: u64,
+    writer: W,
 }
 
-impl Terminal {
+impl<W: Write> Terminal<W> {
     /// Instanciate a new terminal
     /// Polling rate must be exprimed in ms
-    pub const fn new(polling_rate: u64) -> Self {
-        Self { polling_rate }
+    pub const fn new(polling_rate: u64, writer: W) -> Self {
+        Self {
+            polling_rate,
+            writer,
+        }
     }
 
     pub fn read_event(&self) -> OxedEvent {
@@ -32,19 +36,19 @@ impl Terminal {
         terminal::size()
     }
 
-    pub fn open() -> io::Result<()> {
+    pub fn open(&mut self) -> io::Result<()> {
         crossterm::terminal::enable_raw_mode()?;
-        io::stdout().queue(EnterAlternateScreen)?;
-        io::stdout().queue(Clear(ClearType::All))?;
+        self.writer.queue(EnterAlternateScreen)?;
+        self.writer.queue(Clear(ClearType::All))?;
 
         Ok(())
     }
 
-    pub fn close() -> io::Result<()> {
+    pub fn close(&mut self) -> io::Result<()> {
         crossterm::terminal::disable_raw_mode()?;
-        io::stdout().queue(LeaveAlternateScreen)?;
-        io::stdout().write_all(b"Leaving oxed...")?;
-        io::stdout().flush()?;
+        self.writer.queue(LeaveAlternateScreen)?;
+        self.writer.write_all(b"Leaving oxed...")?;
+        self.writer.flush()?;
         Ok(())
     }
 }

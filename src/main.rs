@@ -39,18 +39,18 @@ enum Mode {
 const POLLING_RATE_AS_MS: u64 = 100;
 
 /// This represent the text editor
-struct Oxed {
+struct Oxed<W: Write> {
     // Current working directory
     cwd: PathBuf,
     file: Option<PathBuf>,
     mode: Mode,
     state: State,
-    terminal: Terminal,
+    terminal: Terminal<W>,
     buffer: Buffer,
 }
 
-impl Oxed {
-    fn init(cwd: PathBuf, file: Option<PathBuf>) -> io::Result<Self> {
+impl<W: Write> Oxed<W> {
+    fn init(cwd: PathBuf, file: Option<PathBuf>, writer: W) -> io::Result<Self> {
         // Load the buffer with given file if it exist
         let buffer = if let Some(file) = &file {
             println!("INFO opening file: {}", file.display());
@@ -69,19 +69,19 @@ impl Oxed {
             file,
             mode: Mode::Normal,
             state: State::Running,
-            terminal: Terminal::new(POLLING_RATE_AS_MS),
+            terminal: Terminal::new(POLLING_RATE_AS_MS, writer),
             buffer,
         })
     }
 
     // TODO Rework this
-    fn render_base_screen(buf: &Buffer) -> io::Result<()> {
+    fn render_base_screen(&mut self) -> io::Result<()> {
         // Preparing alternate screen
-        let screen_size = Terminal::size()?;
+        let screen_size = Terminal::<W>::size()?;
 
-        Terminal::open()?;
+        self.terminal.open()?;
 
-        View::render(buf, screen_size)?;
+        View::render(&self.buffer, screen_size)?;
 
         // flushing only when its necessary
         io::stdout().flush()?;
@@ -91,7 +91,7 @@ impl Oxed {
 
     pub fn run(&mut self) -> io::Result<()> {
         // Rework this
-        Self::render_base_screen(&self.buffer)?;
+        self.render_base_screen()?;
 
         loop {
             let event = self.terminal.read_event();
@@ -104,7 +104,7 @@ impl Oxed {
                 }
 
                 State::Stop => {
-                    Terminal::close()?;
+                    self.terminal.close()?;
                     return Ok(());
                 }
             }
@@ -170,7 +170,7 @@ fn main() -> io::Result<()> {
     let cwd = std::env::current_dir()?;
     println!("Current working directory: {}", cwd.display());
 
-    let mut oxed = Oxed::init(cwd, args.file_path)?;
+    let mut oxed = Oxed::<io::Stdout>::init(cwd, args.file_path, io::stdout())?;
 
     oxed.run()?;
 
