@@ -3,7 +3,6 @@ use std::{
     io::{self, BufReader, Write},
     path::PathBuf,
     println,
-    time::Duration,
 };
 
 use clap::Parser;
@@ -11,13 +10,15 @@ use clap::Parser;
 use crossterm::{
     QueueableCommand,
     cursor::{self},
-    event::{self, KeyCode, KeyEvent},
-    terminal::{self, Clear, EnterAlternateScreen, LeaveAlternateScreen, size},
+    event::{KeyCode, KeyEvent},
+    terminal::{Clear, EnterAlternateScreen, LeaveAlternateScreen, size},
 };
 
 mod buffer;
+mod terminal;
 
 use crate::buffer::Buffer;
+use crate::terminal::Terminal;
 
 #[derive(Parser, Debug)]
 #[command(name = "oxed")]
@@ -211,30 +212,6 @@ impl TryFrom<crossterm::event::Event> for OxedEvent {
     }
 }
 
-struct Terminal {
-    polling_rate: u64,
-}
-
-impl Terminal {
-    /// Instanciate a new terminal
-    /// Polling rate must be exprimed in ms
-    pub const fn new(polling_rate: u64) -> Self {
-        Self { polling_rate }
-    }
-
-    pub fn read_event(&self) -> OxedEvent {
-        if matches!(
-            event::poll(Duration::from_millis(self.polling_rate)),
-            Ok(true)
-        ) && let Ok(event) = crossterm::event::read()
-        {
-            return event.try_into().unwrap_or(OxedEvent::Tick);
-        }
-
-        OxedEvent::Tick
-    }
-}
-
 struct View;
 
 impl View {
@@ -268,7 +245,7 @@ impl View {
     pub fn render_error(msg: &str) -> io::Result<()> {
         let mut handle = io::stdout();
 
-        let size = terminal::size()?;
+        let size = Terminal::size()?;
         let pos = cursor::position()?;
 
         // Move the cursor to bottom row
