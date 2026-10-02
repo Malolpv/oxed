@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, BufReader, Write},
+    io::{self, BufReader, BufWriter, Write},
     path::PathBuf,
     println,
 };
@@ -170,7 +170,10 @@ fn main() -> io::Result<()> {
     let cwd = std::env::current_dir()?;
     println!("Current working directory: {}", cwd.display());
 
-    let mut oxed = Oxed::<io::Stdout>::init(cwd, args.file_path, io::stdout())?;
+    // We are wrapping the stdout handle inside a bufwritter to minimize syscalls.
+    // this way syscalls happens only when flushing the bufwriter
+    let mut oxed =
+        Oxed::<BufWriter<io::Stdout>>::init(cwd, args.file_path, BufWriter::new(io::stdout()))?;
 
     oxed.run()?;
 
