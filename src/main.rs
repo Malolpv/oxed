@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, BufReader, BufWriter, Write},
+    io::{self, BufReader, Write},
     path::PathBuf,
     println,
 };
@@ -32,7 +32,8 @@ enum State {
 enum Mode {
     Normal,
     Insert,
-    // Visual,
+    Visual,
+    Command,
 }
 
 /// Polling rate in ms
@@ -79,28 +80,24 @@ impl<W: Write> Oxed<W> {
         // Preparing alternate screen
         let screen_size = Terminal::<W>::size()?;
 
-        self.terminal.open()?;
+        self.terminal.open(false)?;
 
         View::render(&self.buffer, screen_size)?;
 
         // flushing only when its necessary
-        io::stdout().flush()?;
+        self.terminal.flush()?;
 
         Ok(())
     }
 
     pub fn run(&mut self) -> io::Result<()> {
-        // Rework this
         self.render_base_screen()?;
 
         loop {
-            let event = self.terminal.read_event();
-
-            self.state = self.handle_event(&event);
-
             match self.state {
                 State::Running => {
-                    // Do some running things
+                    let event = self.terminal.read_event();
+                    self.handle_event(&event);
                 }
 
                 State::Stop => {
@@ -113,49 +110,28 @@ impl<W: Write> Oxed<W> {
         }
     }
 
-    fn handle_event(&self, event: &OxedEvent) -> State {
-        match event {
-            OxedEvent::KeyPressed(key) => {
-                match self.mode {
-                    Mode::Normal => {
-                        // Here we should handle any keypress as a keyshortcut
-                        // println!("Handle keyr shortcuts");
-                        match key.code {
-                            // KeyCode::Up | KeyCode::Char('z') => TerminalEvent::MoveUp(1),
-                            // KeyCode::Down | KeyCode::Char('s') => TerminalEvent::MoveDown(1),
-                            // KeyCode::Left | KeyCode::Char('q') => TerminalEvent::MoveLeft(1),
-                            // KeyCode::Right | KeyCode::Char('d') => TerminalEvent::MoveRight(1),
-                            // KeyCode::Char('c')
-                            //     if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            // {
-                            //     TerminalEvent::Quit
-                            // }
-                            KeyCode::Esc => {
-                                // TODO add the stdout handle to oxed struct to simplify testing
-                                return State::Stop;
-                            }
-                            _ => {
-                                let _res = View::render_error("Unhandled keybind");
-                            }
-                        }
-                    }
-                    Mode::Insert => {
-                        //Here we should handle any keypress as a char
-                        println!("Handle key press as user input");
-                    }
+    fn handle_normal_key(&mut self, key: &KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                if key.is_press() {
+                    self.state = State::Stop;
                 }
-                // println!("Handle key press event");
             }
-            OxedEvent::Resize(width, height) => {
-                // println!("INFO Resize event [{width},{height}]");
-            }
-            OxedEvent::Tick => {
-                // Later we can handle routines in there
-                // println!("INFO: Tick received");
+            _ => {
+                let _res = View::render_error("Unhandled keybind");
             }
         }
+    }
 
-        State::Running
+    fn handle_event(&mut self, event: &OxedEvent) {
+        match event {
+            OxedEvent::Key(key) => match self.mode {
+                Mode::Normal => self.handle_normal_key(key),
+                _ => eprintln!("Unhandled mode"),
+            },
+            OxedEvent::Resize(width, height) => eprintln!("Unhandled resize"),
+            OxedEvent::Tick => {}
+        }
     }
 }
 
@@ -172,8 +148,12 @@ fn main() -> io::Result<()> {
 
     // We are wrapping the stdout handle inside a bufwritter to minimize syscalls.
     // this way syscalls happens only when flushing the bufwriter
-    let mut oxed =
-        Oxed::<BufWriter<io::Stdout>>::init(cwd, args.file_path, BufWriter::new(io::stdout()))?;
+    // Cannot restore cursor position correctly for some reason ???
+    // let mut oxed =
+    //     Oxed::<BufWriter<io::Stdout>>::init(cwd, args.file_path, BufWriter::new(io::stdout()))?;
+
+    // Successfully retore position so stay with this for now
+    let mut oxed = Oxed::<io::Stdout>::init(cwd, args.file_path, io::stdout())?;
 
     oxed.run()?;
 
@@ -183,7 +163,7 @@ fn main() -> io::Result<()> {
 #[derive(Debug, PartialEq)]
 enum OxedEvent {
     Resize(u16, u16),
-    KeyPressed(KeyEvent),
+    Key(KeyEvent),
     Tick,
 }
 
@@ -192,7 +172,7 @@ impl TryFrom<crossterm::event::Event> for OxedEvent {
 
     fn try_from(value: crossterm::event::Event) -> Result<Self, Self::Error> {
         match value {
-            crossterm::event::Event::Key(key) => Ok(Self::KeyPressed(key)),
+            crossterm::event::Event::Key(key) => Ok(Self::Key(key)),
             crossterm::event::Event::Resize(w, h) => Ok(Self::Resize(w, h)),
             _ => Err(String::from("ERROR : Unsupported crossterm event")),
         }
