@@ -1,4 +1,4 @@
-use crate::OxedEvent;
+use crate::oxed::OxedEvent;
 // use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 // use crossterm::{QueueableCommand, cursor};
 use crossterm::{event, terminal};

@@ -17,6 +17,7 @@ impl PartialEq for Cell {
         self.symbol == other.symbol
     }
 
+    #[allow(clippy::partialeq_ne_impl)]
     fn ne(&self, other: &Self) -> bool {
         self.symbol != other.symbol
     }
