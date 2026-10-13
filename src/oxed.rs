@@ -6,8 +6,12 @@ use std::{
 };
 
 use crossterm::{
-    QueueableCommand, cursor,
-    event::{KeyCode, KeyEvent},
+    ExecutableCommand, QueueableCommand,
+    cursor::{self, MoveDown, MoveLeft, MoveRight, MoveUp},
+    event::{
+        KeyCode::{self, Char},
+        KeyEvent,
+    },
     terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
@@ -84,6 +88,10 @@ impl<W: Write> Oxed<W> {
     pub fn run(&mut self) -> io::Result<()> {
         let initial_frame = self.generate_frame()?;
         self.view.handle_frame(initial_frame, &mut self.writer)?;
+
+        // Reset cursor to top left corner
+        self.writer.queue(cursor::MoveTo(0, 0))?;
+
         self.writer.flush()?;
 
         loop {
@@ -110,8 +118,30 @@ impl<W: Write> Oxed<W> {
                     self.state = State::Stop;
                 }
             }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if key.is_press() {
+                    _ = self.writer.execute(MoveUp(1));
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if key.is_press() {
+                    _ = self.writer.execute(MoveDown(1));
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if key.is_press() {
+                    _ = self.writer.execute(MoveRight(1));
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if key.is_press() {
+                    _ = self.writer.execute(MoveLeft(1));
+                }
+            }
             _ => {
-                let _res = View::render_error("Unhandled keybind");
+                if key.is_press() {
+                    let _res = View::render_error("Unhandled keybind");
+                }
             }
         }
     }
