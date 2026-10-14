@@ -12,7 +12,7 @@ use crossterm::{
         KeyCode::{self},
         KeyEvent,
     },
-    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle},
 };
 
 use crate::buffer::Buffer;
@@ -63,9 +63,15 @@ pub struct Oxed<W: Write> {
 
 impl<W: Write> Oxed<W> {
     pub fn init(cwd: PathBuf, file: Option<PathBuf>, mut writer: W) -> io::Result<Self> {
+        let mut title: Option<&str> = None;
         // Load the buffer with given file if it exist
         let buffer = if let Some(file) = &file {
             println!("INFO opening file: {}", file.display());
+
+            if let Some(name) = file.file_name() {
+                title = Some(name.to_str().unwrap_or(""));
+            }
+
             let file = File::open(file)?;
 
             let reader = BufReader::new(file);
@@ -80,6 +86,7 @@ impl<W: Write> Oxed<W> {
         let terminal = Terminal::new(POLLING_RATE_AS_MS)?;
 
         // Initiate terminal
+        writer.queue(SetTitle(format!("Oxed : {}", title.unwrap_or("Untitled"))))?;
         writer.queue(cursor::SavePosition)?;
         writer.queue(EnterAlternateScreen)?;
         writer.queue(Clear(ClearType::All))?;
