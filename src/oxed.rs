@@ -9,7 +9,7 @@ use crossterm::{
     ExecutableCommand, QueueableCommand,
     cursor::{self, MoveDown, MoveLeft, MoveRight, MoveUp},
     event::{
-        KeyCode::{self, Char},
+        KeyCode::{self},
         KeyEvent,
     },
     terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
@@ -33,6 +33,13 @@ enum Mode {
     _Command,
 }
 
+enum Action {
+    None,
+    Redraw,
+    Resize,
+    Quit,
+}
+
 /// Polling rate in ms
 const POLLING_RATE_AS_MS: u64 = 100;
 
@@ -52,7 +59,6 @@ pub struct Oxed<W: Write> {
     cursor_y: usize,
     row_offset: usize,
     col_offset: usize,
-    needs_redraw: bool,
 }
 
 impl<W: Write> Oxed<W> {
@@ -92,7 +98,6 @@ impl<W: Write> Oxed<W> {
             cursor_y: usize::default(),
             row_offset: usize::default(),
             col_offset: usize::default(),
-            needs_redraw: false,
         })
     }
 
@@ -109,20 +114,28 @@ impl<W: Write> Oxed<W> {
             match self.state {
                 State::Running => {
                     let event = self.terminal.read_event();
-                    self.handle_event(&event)?;
+                    let action = self.handle_event(&event)?;
 
-                    if self.needs_redraw {
-                        let next_frame: FrameBuffer = self.generate_frame()?;
-                        self.view
-                            .handle_frame(next_frame, &mut self.writer, false)?;
+                    match action {
+                        Action::Redraw | Action::Resize => {
+                            let next_frame: FrameBuffer = self.generate_frame()?;
+                            self.view
+                                .handle_frame(next_frame, &mut self.writer, false)?;
 
-                        // Puts cursor back in place after redraw
-                        self.writer.queue(cursor::MoveTo(
-                            u16::try_from(self.cursor_x).unwrap_or(u16::MAX),
-                            u16::try_from(self.cursor_y).unwrap_or(u16::MAX),
-                        ))?;
-                        self.writer.flush()?;
-                        self.needs_redraw = false;
+                            // Puts cursor back in place after redraw
+                            self.writer.queue(cursor::MoveTo(
+                                u16::try_from(self.cursor_x).unwrap_or(u16::MAX),
+                                u16::try_from(self.cursor_y).unwrap_or(u16::MAX),
+                            ))?;
+                            self.writer.flush()?;
+                        }
+                        Action::Quit => {
+                            self.state = State::Stop;
+                        }
+
+                        Action::None => {
+                            // Do Nothing
+                        }
                     }
                 }
 
@@ -136,53 +149,45 @@ impl<W: Write> Oxed<W> {
         }
     }
 
-    fn handle_event(&mut self, event: &OxedEvent) -> io::Result<()> {
+    fn handle_event(&mut self, event: &OxedEvent) -> io::Result<Action> {
         match event {
             OxedEvent::Key(key) => match self.mode {
-                Mode::Normal => self.handle_normal_key(key)?,
+                Mode::Normal => self.handle_normal_key(key),
+                //TODO handle this one aswell
+                Mode::_Insert => Ok(Action::None),
                 _ => {
                     eprintln!("Unhandled mode");
+                    Ok(Action::None)
                 }
             },
             OxedEvent::Resize(_width, _height) => {
-                // manage redrawing
-                let next_frame: FrameBuffer = self.generate_frame()?;
-                self.view.handle_frame(next_frame, &mut self.writer, true)?;
-                self.writer.execute(cursor::MoveTo(
-                    u16::try_from(self.cursor_x).unwrap_or(u16::MAX),
-                    u16::try_from(self.cursor_y).unwrap_or(u16::MAX),
-                ))?;
+                //Signals redrawing
+                Ok(Action::Resize)
             }
-            OxedEvent::Tick => {
-                // No need to recreate a frame since nothing happened
-            }
+            OxedEvent::Tick => Ok(Action::None),
         }
-        Ok(())
     }
 
-    fn handle_normal_key(&mut self, key: &KeyEvent) -> io::Result<()> {
+    fn handle_normal_key(&mut self, key: &KeyEvent) -> io::Result<Action> {
         if !key.is_press() {
-            return Ok(());
+            return Ok(Action::None);
         }
 
         let (_, screen_height) = Terminal::size()?;
         let screen_height = usize::from(screen_height);
 
         match key.code {
-            KeyCode::Esc => {
-                if key.is_press() {
-                    self.state = State::Stop;
-                }
-            }
+            KeyCode::Esc => Ok(Action::Quit),
             KeyCode::Up | KeyCode::Char('k') => {
                 self.cursor_y = self.cursor_y.saturating_sub(1);
 
                 // Do we need to scroll up ??
                 if self.cursor_y < self.row_offset {
                     self.row_offset = self.row_offset.saturating_sub(1);
-                    self.needs_redraw = true;
+                    return Ok(Action::Redraw);
                 }
                 self.writer.execute(MoveUp(1))?;
+                Ok(Action::None)
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if self
@@ -195,11 +200,12 @@ impl<W: Write> Oxed<W> {
                     if self.cursor_y >= self.row_offset.saturating_add(screen_height) {
                         self.row_offset =
                             self.row_offset.checked_add(1).unwrap_or(self.buffer.len());
-                        self.needs_redraw = true;
+                        return Ok(Action::Redraw);
                     }
 
                     self.writer.execute(MoveDown(1))?;
                 }
+                Ok(Action::None)
             }
 
             // TODO implement horizontal scrolling
@@ -207,19 +213,19 @@ impl<W: Write> Oxed<W> {
                 if key.is_press() {
                     _ = self.writer.execute(MoveRight(1));
                 }
+                Ok(Action::None)
             }
             KeyCode::Left | KeyCode::Char('h') => {
                 if key.is_press() {
                     _ = self.writer.execute(MoveLeft(1));
                 }
+                Ok(Action::None)
             }
             _ => {
-                if key.is_press() {
-                    let _res = View::render_error("Unhandled keybind");
-                }
+                let _res = View::render_error("Unhandled keybind");
+                Ok(Action::None)
             }
         }
-        Ok(())
     }
 
     fn generate_frame(&self) -> io::Result<FrameBuffer> {
