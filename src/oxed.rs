@@ -47,6 +47,12 @@ pub struct Oxed<W: Write> {
     buffer: Buffer,
     view: View,
     writer: W,
+
+    cursor_x: usize,
+    cursor_y: usize,
+    row_offset: usize,
+    col_offset: usize,
+    needs_redraw: bool,
 }
 
 impl<W: Write> Oxed<W> {
@@ -82,23 +88,42 @@ impl<W: Write> Oxed<W> {
             buffer,
             view: View::new(None),
             writer,
+            cursor_x: usize::default(),
+            cursor_y: usize::default(),
+            row_offset: usize::default(),
+            col_offset: usize::default(),
+            needs_redraw: false,
         })
     }
 
     pub fn run(&mut self) -> io::Result<()> {
         let initial_frame = self.generate_frame()?;
-        self.view.handle_frame(initial_frame, &mut self.writer)?;
-
+        self.view
+            .handle_frame(initial_frame, &mut self.writer, false)?;
         // Reset cursor to top left corner
         self.writer.queue(cursor::MoveTo(0, 0))?;
-
         self.writer.flush()?;
 
+        // Run oxed
         loop {
             match self.state {
                 State::Running => {
                     let event = self.terminal.read_event();
                     self.handle_event(&event)?;
+
+                    if self.needs_redraw {
+                        let next_frame: FrameBuffer = self.generate_frame()?;
+                        self.view
+                            .handle_frame(next_frame, &mut self.writer, false)?;
+
+                        // Puts cursor back in place after redraw
+                        self.writer.queue(cursor::MoveTo(
+                            u16::try_from(self.cursor_x).unwrap_or(u16::MAX),
+                            u16::try_from(self.cursor_y).unwrap_or(u16::MAX),
+                        ))?;
+                        self.writer.flush()?;
+                        self.needs_redraw = false;
+                    }
                 }
 
                 State::Stop => {
@@ -111,7 +136,38 @@ impl<W: Write> Oxed<W> {
         }
     }
 
-    fn handle_normal_key(&mut self, key: &KeyEvent) {
+    fn handle_event(&mut self, event: &OxedEvent) -> io::Result<()> {
+        match event {
+            OxedEvent::Key(key) => match self.mode {
+                Mode::Normal => self.handle_normal_key(key)?,
+                _ => {
+                    eprintln!("Unhandled mode");
+                }
+            },
+            OxedEvent::Resize(_width, _height) => {
+                // manage redrawing
+                let next_frame: FrameBuffer = self.generate_frame()?;
+                self.view.handle_frame(next_frame, &mut self.writer, true)?;
+                self.writer.execute(cursor::MoveTo(
+                    u16::try_from(self.cursor_x).unwrap_or(u16::MAX),
+                    u16::try_from(self.cursor_y).unwrap_or(u16::MAX),
+                ))?;
+            }
+            OxedEvent::Tick => {
+                // No need to recreate a frame since nothing happened
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_normal_key(&mut self, key: &KeyEvent) -> io::Result<()> {
+        if !key.is_press() {
+            return Ok(());
+        }
+
+        let (_, screen_height) = Terminal::size()?;
+        let screen_height = usize::from(screen_height);
+
         match key.code {
             KeyCode::Esc => {
                 if key.is_press() {
@@ -119,15 +175,34 @@ impl<W: Write> Oxed<W> {
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if key.is_press() {
-                    _ = self.writer.execute(MoveUp(1));
+                self.cursor_y = self.cursor_y.saturating_sub(1);
+
+                // Do we need to scroll up ??
+                if self.cursor_y < self.row_offset {
+                    self.row_offset = self.row_offset.saturating_sub(1);
+                    self.needs_redraw = true;
                 }
+                self.writer.execute(MoveUp(1))?;
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if key.is_press() {
-                    _ = self.writer.execute(MoveDown(1));
+                if self
+                    .cursor_y
+                    .checked_add(1)
+                    .is_some_and(|y| y < self.buffer.len())
+                {
+                    self.cursor_y = self.cursor_y.checked_add(1).unwrap_or(self.buffer.len());
+
+                    if self.cursor_y >= self.row_offset.saturating_add(screen_height) {
+                        self.row_offset =
+                            self.row_offset.checked_add(1).unwrap_or(self.buffer.len());
+                        self.needs_redraw = true;
+                    }
+
+                    self.writer.execute(MoveDown(1))?;
                 }
             }
+
+            // TODO implement horizontal scrolling
             KeyCode::Right | KeyCode::Char('l') => {
                 if key.is_press() {
                     _ = self.writer.execute(MoveRight(1));
@@ -144,44 +219,23 @@ impl<W: Write> Oxed<W> {
                 }
             }
         }
-    }
-
-    fn handle_event(&mut self, event: &OxedEvent) -> io::Result<()> {
-        match event {
-            OxedEvent::Key(key) => match self.mode {
-                Mode::Normal => self.handle_normal_key(key),
-                _ => eprintln!("Unhandled mode"),
-            },
-            OxedEvent::Resize(_width, _height) => {
-                // manage redrawing
-                let next_frame: FrameBuffer = self.generate_frame()?;
-                self.view.handle_frame(next_frame, &mut self.writer)?;
-                self.writer.flush()?;
-            }
-            OxedEvent::Tick => {
-                // No need to recreate a frame since nothing happened
-            }
-        }
         Ok(())
     }
 
     fn generate_frame(&self) -> io::Result<FrameBuffer> {
         let (width, height) = Terminal::size()?;
+        let (w, h) = (usize::from(width), usize::from(height));
 
         let mut frame: Vec<Cell> = vec![Cell::new(' '); usize::from(height.saturating_mul(width))];
 
-        if let Some(buf) = self
-            .buffer
-            .content()
-            .get(0..std::cmp::min(usize::from(height), self.buffer.len()))
-        {
-            for (y, line) in buf.iter().enumerate() {
-                for (x, symbol) in line.chars().enumerate() {
-                    if x < usize::from(width) {
-                        let idx = y.saturating_mul(usize::from(width)).saturating_add(x);
-                        if let Some(cell) = frame.get_mut(idx) {
-                            cell.symbol = symbol;
-                        }
+        let visible_lines = self.buffer.content().iter().skip(self.row_offset).take(h);
+
+        for (y, line) in visible_lines.enumerate() {
+            for (x, symbol) in line.chars().enumerate() {
+                if x < w {
+                    let idx = y.saturating_mul(w).saturating_add(x);
+                    if let Some(cell) = frame.get_mut(idx) {
+                        cell.symbol = symbol;
                     }
                 }
             }

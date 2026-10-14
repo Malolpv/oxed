@@ -36,7 +36,12 @@ impl View {
         Ok(())
     }
 
-    pub fn handle_frame<W: Write>(&mut self, next: FrameBuffer, writer: &mut W) -> io::Result<()> {
+    pub fn handle_frame<W: Write>(
+        &mut self,
+        next: FrameBuffer,
+        writer: &mut W,
+        flush: bool,
+    ) -> io::Result<()> {
         let diff = self
             .frame
             .as_ref()
@@ -50,7 +55,7 @@ impl View {
                 // TODO Implement no change, meybe we just want to do nothing ?
             }
             Diff::Full => {
-                Self::render_full_frame(&next, writer)?;
+                Self::render_full_frame(&next, writer, flush)?;
             }
         }
 
@@ -66,7 +71,11 @@ impl View {
         Ok(())
     }
 
-    fn render_full_frame<W: Write>(frame: &FrameBuffer, writer: &mut W) -> io::Result<()> {
+    fn render_full_frame<W: Write>(
+        frame: &FrameBuffer,
+        writer: &mut W,
+        flush: bool,
+    ) -> io::Result<()> {
         // Reset cursor and screen
         writer.queue(Clear(ClearType::All))?;
         writer.queue(MoveTo(0, 0))?;
@@ -85,8 +94,9 @@ impl View {
             writer.write_all(line.as_bytes())?;
         }
 
-        // TODO check if this is the right place for flushing
-        writer.flush()?;
+        if flush {
+            writer.flush()?;
+        }
 
         Ok(())
     }
