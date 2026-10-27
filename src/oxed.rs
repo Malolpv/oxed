@@ -15,11 +15,11 @@ use crossterm::{
     terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle},
 };
 
-use crate::buffer::Buffer;
 use crate::cell::Cell;
 use crate::frame_buffer::FrameBuffer;
 use crate::terminal::Terminal;
 use crate::view::View;
+use crate::{buffer::Buffer, oxed::Mode::Normal};
 
 enum State {
     Running,
@@ -28,7 +28,7 @@ enum State {
 
 enum Mode {
     Normal,
-    _Insert,
+    Insert,
     _Visual,
     _Command,
 }
@@ -164,7 +164,7 @@ impl<W: Write> Oxed<W> {
             OxedEvent::Key(key) => match self.mode {
                 Mode::Normal => self.handle_normal_key(key),
                 //TODO handle this one aswell
-                Mode::_Insert => Ok(Action::None),
+                Mode::Insert => self.handle_insert_key(key),
                 _ => {
                     eprintln!("Unhandled mode");
                     Ok(Action::None)
@@ -175,6 +175,69 @@ impl<W: Write> Oxed<W> {
                 Ok(Action::Resize)
             }
             OxedEvent::Tick => Ok(Action::None),
+        }
+    }
+
+    fn handle_insert_key(&mut self, key: &KeyEvent) -> io::Result<Action> {
+        if !key.is_press() {
+            return Ok(Action::None);
+        }
+
+        match key.code {
+            KeyCode::Char(c) => {
+                // Retrieve current line
+                if let Some(line) = self.buffer.content_mut().get_mut(self.cursor_y) {
+                    let insert_idx = self.cursor_x.min(line.chars().count());
+
+                    let byte_idx = std::cmp::min(insert_idx, line.len());
+
+                    // let byte_idx = line
+                    //     .char_indices()
+                    //     .map(|(idx, _)| idx)
+                    //     .nth(insert_idx)
+                    //     .unwrap_or(line.len());
+
+                    // Insert and update cursor
+                    line.insert(byte_idx, c);
+                    self.cursor_x = self.cursor_x.saturating_add(1);
+
+                    // Handle automatic scroll
+                    let (screen_width, _) = Terminal::size()?;
+                    if self.cursor_x >= self.col_offset.saturating_add(usize::from(screen_width)) {
+                        self.col_offset = self.col_offset.saturating_add(1);
+                    }
+                }
+                Ok(Action::Redraw)
+            }
+            KeyCode::Backspace => {
+                if self.cursor_x > 0 {
+                    self.cursor_x = self.cursor_x.saturating_sub(1);
+                    if let Some(line) = self.buffer.content_mut().get_mut(self.cursor_y) {
+                        let remove_idx = self.cursor_x;
+                        let byte_idx = line.char_indices().map(|(idx, _)| idx).nth(remove_idx);
+
+                        if let Some(b_idx) = byte_idx {
+                            line.remove(b_idx);
+                        }
+                    }
+
+                    // Adjust coll offset based on previous actions
+                    if self.cursor_x < self.col_offset {
+                        self.col_offset = self.col_offset.saturating_sub(1);
+                    }
+                }
+                Ok(Action::Redraw)
+            }
+
+            KeyCode::Esc => {
+                self.mode = Normal;
+                Ok(Action::None)
+            }
+
+            _ => {
+                // unhandled key
+                Ok(Action::None)
+            }
         }
     }
 
@@ -249,6 +312,10 @@ impl<W: Write> Oxed<W> {
 
                 self.writer.execute(MoveLeft(1))?;
 
+                Ok(Action::None)
+            }
+            KeyCode::Char('i') => {
+                self.mode = Mode::Insert;
                 Ok(Action::None)
             }
             _ => {

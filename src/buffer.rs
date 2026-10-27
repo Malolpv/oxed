@@ -32,6 +32,10 @@ impl Buffer {
     pub const fn content(&self) -> &Vec<String> {
         &self.content
     }
+
+    pub const fn content_mut(&mut self) -> &mut Vec<String> {
+        &mut self.content
+    }
 }
 
 #[cfg(test)]
