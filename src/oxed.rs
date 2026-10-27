@@ -129,10 +129,13 @@ impl<W: Write> Oxed<W> {
                             self.view
                                 .handle_frame(next_frame, &mut self.writer, false)?;
 
+                            let x_relative_pos = self.cursor_x.saturating_sub(self.col_offset);
+                            let y_relative_pos = self.cursor_y.saturating_sub(self.row_offset);
+
                             // Puts cursor back in place after redraw
                             self.writer.queue(cursor::MoveTo(
-                                u16::try_from(self.cursor_x).unwrap_or(u16::MAX),
-                                u16::try_from(self.cursor_y).unwrap_or(u16::MAX),
+                                u16::try_from(x_relative_pos).unwrap_or(u16::MIN),
+                                u16::try_from(y_relative_pos).unwrap_or(u16::MIN),
                             ))?;
                             self.writer.flush()?;
                         }
@@ -180,8 +183,9 @@ impl<W: Write> Oxed<W> {
             return Ok(Action::None);
         }
 
-        let (_, screen_height) = Terminal::size()?;
+        let (screen_width, screen_height) = Terminal::size()?;
         let screen_height = usize::from(screen_height);
+        let screen_width = usize::from(screen_width);
 
         match key.code {
             KeyCode::Esc => Ok(Action::Quit),
@@ -217,15 +221,34 @@ impl<W: Write> Oxed<W> {
 
             // TODO implement horizontal scrolling
             KeyCode::Right | KeyCode::Char('l') => {
-                if key.is_press() {
-                    _ = self.writer.execute(MoveRight(1));
+                if self.cursor_x.checked_add(1).is_some_and(|x| {
+                    x < self
+                        .buffer
+                        .line(self.cursor_y)
+                        .unwrap_or(&String::new())
+                        .len()
+                }) {
+                    self.cursor_x = self.cursor_x.checked_add(1).unwrap_or_default();
+
+                    if self.cursor_x >= self.col_offset.saturating_add(screen_width) {
+                        self.col_offset = self.col_offset.checked_add(1).unwrap_or_default();
+                        return Ok(Action::Redraw);
+                    }
+                    self.writer.execute(MoveRight(1))?;
                 }
+
                 Ok(Action::None)
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                if key.is_press() {
-                    _ = self.writer.execute(MoveLeft(1));
+                self.cursor_x = self.cursor_x.saturating_sub(1);
+
+                if self.cursor_x < self.col_offset {
+                    self.col_offset = self.col_offset.saturating_sub(1);
+                    return Ok(Action::Redraw);
                 }
+
+                self.writer.execute(MoveLeft(1))?;
+
                 Ok(Action::None)
             }
             _ => {
@@ -244,13 +267,15 @@ impl<W: Write> Oxed<W> {
         let visible_lines = self.buffer.content().iter().skip(self.row_offset).take(h);
 
         for (y, line) in visible_lines.enumerate() {
-            for (x, symbol) in line.chars().enumerate() {
-                if x < w {
-                    let idx = y.saturating_mul(w).saturating_add(x);
-                    if let Some(cell) = frame.get_mut(idx) {
-                        cell.symbol = symbol;
-                    }
+            let visible_chars = line.chars().skip(self.col_offset).take(w);
+
+            for (x, symbol) in visible_chars.enumerate() {
+                // if x < w {
+                let idx = y.saturating_mul(w).saturating_add(x);
+                if let Some(cell) = frame.get_mut(idx) {
+                    cell.symbol = symbol;
                 }
+                // }
             }
         }
 
