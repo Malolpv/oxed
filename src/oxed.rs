@@ -319,6 +319,9 @@ impl<W: Write> Oxed<W> {
 
                 let mut action = if let Some(line) = self.buffer.content().get(self.cursor_y) {
                     self.cursor_x = std::cmp::min(line.chars().count(), self.cursor_x);
+                    if self.cursor_x < self.col_offset {
+                        self.col_offset = self.cursor_x;
+                    }
                     Action::Redraw
                 } else {
                     Action::None
@@ -343,6 +346,9 @@ impl<W: Write> Oxed<W> {
 
                     let mut action = if let Some(line) = self.buffer.content().get(self.cursor_y) {
                         self.cursor_x = std::cmp::min(line.chars().count(), self.cursor_x);
+                        if self.cursor_x < self.col_offset {
+                            self.col_offset = self.cursor_x;
+                        }
                         Action::Redraw
                     } else {
                         Action::None
