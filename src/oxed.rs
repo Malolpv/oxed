@@ -316,11 +316,22 @@ impl<W: Write> Oxed<W> {
         match direction {
             Direction::Up => {
                 self.cursor_y = self.cursor_y.saturating_sub(1);
-                // Do we need to scroll up ??
-                if self.cursor_y < self.row_offset {
+
+                let mut action = if let Some(line) = self.buffer.content().get(self.cursor_y) {
+                    self.cursor_x = std::cmp::min(line.chars().count(), self.cursor_x);
+                    Action::Redraw
+                } else {
+                    Action::None
+                };
+
+                action = if self.cursor_y < self.row_offset {
                     self.row_offset = self.row_offset.saturating_sub(1);
-                    return Action::Redraw;
-                }
+                    Action::Redraw
+                } else {
+                    action
+                };
+
+                return action;
             }
             Direction::Down => {
                 if self
@@ -330,11 +341,22 @@ impl<W: Write> Oxed<W> {
                 {
                     self.cursor_y = self.cursor_y.checked_add(1).unwrap_or(self.buffer.len());
 
-                    if self.cursor_y >= self.row_offset.saturating_add(screen_height) {
+                    let mut action = if let Some(line) = self.buffer.content().get(self.cursor_y) {
+                        self.cursor_x = std::cmp::min(line.chars().count(), self.cursor_x);
+                        Action::Redraw
+                    } else {
+                        Action::None
+                    };
+
+                    action = if self.cursor_y >= self.row_offset.saturating_add(screen_height) {
                         self.row_offset =
                             self.row_offset.checked_add(1).unwrap_or(self.buffer.len());
-                        return Action::Redraw;
-                    }
+                        Action::Redraw
+                    } else {
+                        action
+                    };
+
+                    return action;
                 }
             }
             Direction::Right => {
