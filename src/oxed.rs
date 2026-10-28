@@ -179,7 +179,6 @@ impl<W: Write> Oxed<W> {
         match event {
             OxedEvent::Key(key) => match self.mode {
                 Mode::Normal => self.handle_normal_key(key),
-                //TODO handle this one aswell
                 Mode::Insert => self.handle_insert_key(key),
                 _ => {
                     eprintln!("Unhandled mode");
@@ -211,12 +210,6 @@ impl<W: Write> Oxed<W> {
 
                     let byte_idx = std::cmp::min(insert_idx, line.len());
 
-                    // let byte_idx = line
-                    //     .char_indices()
-                    //     .map(|(idx, _)| idx)
-                    //     .nth(insert_idx)
-                    //     .unwrap_or(line.len());
-
                     // Insert and update cursor
                     line.insert(byte_idx, c);
                     self.cursor_x = self.cursor_x.saturating_add(1);
@@ -241,7 +234,7 @@ impl<W: Write> Oxed<W> {
                         }
                     }
 
-                    // Adjust coll offset based on previous actions
+                    // Adjust col offset based on previous actions
                     if self.cursor_x < self.col_offset {
                         self.col_offset = self.col_offset.saturating_sub(1);
                     }
@@ -400,12 +393,10 @@ impl<W: Write> Oxed<W> {
             let visible_chars = line.chars().skip(self.col_offset).take(w);
 
             for (x, symbol) in visible_chars.enumerate() {
-                // if x < w {
                 let idx = y.saturating_mul(w).saturating_add(x);
                 if let Some(cell) = frame.get_mut(idx) {
                     cell.symbol = symbol;
                 }
-                // }
             }
         }
 
