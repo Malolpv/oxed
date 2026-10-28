@@ -361,11 +361,12 @@ impl<W: Write> Oxed<W> {
             }
             Direction::Right => {
                 if self.cursor_x.checked_add(1).is_some_and(|x| {
-                    x < self
+                    x <= self
                         .buffer
                         .line(self.cursor_y)
                         .unwrap_or(&String::new())
-                        .len()
+                        .chars()
+                        .count()
                 }) {
                     self.cursor_x = self.cursor_x.checked_add(1).unwrap_or_default();
 
