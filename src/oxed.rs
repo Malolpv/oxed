@@ -7,7 +7,7 @@ use std::{
 
 use crossterm::{
     ExecutableCommand, QueueableCommand,
-    cursor::{self, MoveDown, MoveLeft, MoveRight, MoveUp},
+    cursor::{self},
     event::{
         KeyCode::{self},
         KeyEvent,
@@ -20,6 +20,13 @@ use crate::frame_buffer::FrameBuffer;
 use crate::terminal::Terminal;
 use crate::view::View;
 use crate::{buffer::Buffer, oxed::Mode::Normal};
+
+enum Direction {
+    Up,
+    Down,
+    Right,
+    Left,
+}
 
 enum State {
     Running,
@@ -36,6 +43,7 @@ enum Mode {
 enum Action {
     None,
     Redraw,
+    UpdateCursor,
     Resize,
     Quit,
 }
@@ -139,6 +147,14 @@ impl<W: Write> Oxed<W> {
                             ))?;
                             self.writer.flush()?;
                         }
+                        Action::UpdateCursor => {
+                            let x_relative_pos = self.cursor_x.saturating_sub(self.col_offset);
+                            let y_relative_pos = self.cursor_y.saturating_sub(self.row_offset);
+                            self.writer.execute(cursor::MoveTo(
+                                u16::try_from(x_relative_pos).unwrap_or(u16::MIN),
+                                u16::try_from(y_relative_pos).unwrap_or(u16::MIN),
+                            ))?;
+                        }
                         Action::Quit => {
                             self.state = State::Stop;
                         }
@@ -182,6 +198,10 @@ impl<W: Write> Oxed<W> {
         if !key.is_press() {
             return Ok(Action::None);
         }
+
+        let (screen_width, screen_height) = Terminal::size()?;
+        let screen_height = usize::from(screen_height);
+        let screen_width = usize::from(screen_width);
 
         match key.code {
             KeyCode::Char(c) => {
@@ -228,6 +248,18 @@ impl<W: Write> Oxed<W> {
                 }
                 Ok(Action::Redraw)
             }
+            KeyCode::Up => {
+                Ok(self.compute_next_position(&Direction::Up, screen_width, screen_height))
+            }
+            KeyCode::Down => {
+                Ok(self.compute_next_position(&Direction::Down, screen_width, screen_height))
+            }
+            KeyCode::Right => {
+                Ok(self.compute_next_position(&Direction::Right, screen_width, screen_height))
+            }
+            KeyCode::Left => {
+                Ok(self.compute_next_position(&Direction::Left, screen_width, screen_height))
+            }
 
             KeyCode::Esc => {
                 self.mode = Normal;
@@ -253,17 +285,44 @@ impl<W: Write> Oxed<W> {
         match key.code {
             KeyCode::Esc => Ok(Action::Quit),
             KeyCode::Up | KeyCode::Char('k') => {
-                self.cursor_y = self.cursor_y.saturating_sub(1);
+                Ok(self.compute_next_position(&Direction::Up, screen_width, screen_height))
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                Ok(self.compute_next_position(&Direction::Down, screen_width, screen_height))
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                Ok(self.compute_next_position(&Direction::Right, screen_width, screen_height))
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                Ok(self.compute_next_position(&Direction::Left, screen_width, screen_height))
+            }
+            KeyCode::Char('i') => {
+                self.mode = Mode::Insert;
+                Ok(Action::None)
+            }
+            _ => {
+                let _res = View::render_error("Unhandled keybind");
+                Ok(Action::None)
+            }
+        }
+    }
 
+    fn compute_next_position(
+        &mut self,
+        direction: &Direction,
+        screen_width: usize,
+        screen_height: usize,
+    ) -> Action {
+        match direction {
+            Direction::Up => {
+                self.cursor_y = self.cursor_y.saturating_sub(1);
                 // Do we need to scroll up ??
                 if self.cursor_y < self.row_offset {
                     self.row_offset = self.row_offset.saturating_sub(1);
-                    return Ok(Action::Redraw);
+                    return Action::Redraw;
                 }
-                self.writer.execute(MoveUp(1))?;
-                Ok(Action::None)
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Direction::Down => {
                 if self
                     .cursor_y
                     .checked_add(1)
@@ -274,16 +333,11 @@ impl<W: Write> Oxed<W> {
                     if self.cursor_y >= self.row_offset.saturating_add(screen_height) {
                         self.row_offset =
                             self.row_offset.checked_add(1).unwrap_or(self.buffer.len());
-                        return Ok(Action::Redraw);
+                        return Action::Redraw;
                     }
-
-                    self.writer.execute(MoveDown(1))?;
                 }
-                Ok(Action::None)
             }
-
-            // TODO implement horizontal scrolling
-            KeyCode::Right | KeyCode::Char('l') => {
+            Direction::Right => {
                 if self.cursor_x.checked_add(1).is_some_and(|x| {
                     x < self
                         .buffer
@@ -295,34 +349,20 @@ impl<W: Write> Oxed<W> {
 
                     if self.cursor_x >= self.col_offset.saturating_add(screen_width) {
                         self.col_offset = self.col_offset.checked_add(1).unwrap_or_default();
-                        return Ok(Action::Redraw);
+                        return Action::Redraw;
                     }
-                    self.writer.execute(MoveRight(1))?;
                 }
-
-                Ok(Action::None)
             }
-            KeyCode::Left | KeyCode::Char('h') => {
+            Direction::Left => {
                 self.cursor_x = self.cursor_x.saturating_sub(1);
 
                 if self.cursor_x < self.col_offset {
                     self.col_offset = self.col_offset.saturating_sub(1);
-                    return Ok(Action::Redraw);
+                    return Action::Redraw;
                 }
-
-                self.writer.execute(MoveLeft(1))?;
-
-                Ok(Action::None)
-            }
-            KeyCode::Char('i') => {
-                self.mode = Mode::Insert;
-                Ok(Action::None)
-            }
-            _ => {
-                let _res = View::render_error("Unhandled keybind");
-                Ok(Action::None)
             }
         }
+        Action::UpdateCursor
     }
 
     fn generate_frame(&self) -> io::Result<FrameBuffer> {
