@@ -1,6 +1,6 @@
 use std::{
-    fs::File,
-    io::{self, BufReader, Write},
+    fs::{File, OpenOptions},
+    io::{self, BufReader, BufWriter, Write},
     path::PathBuf,
     println,
 };
@@ -10,7 +10,7 @@ use crossterm::{
     cursor::{self},
     event::{
         KeyCode::{self},
-        KeyEvent,
+        KeyEvent, KeyModifiers,
     },
     terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle},
 };
@@ -54,8 +54,8 @@ const POLLING_RATE_AS_MS: u64 = 100;
 /// This represent the text editor
 pub struct Oxed<W: Write> {
     // Current working directory
-    _cwd: PathBuf,
-    _file: Option<PathBuf>,
+    cwd: PathBuf,
+    file: Option<PathBuf>,
     mode: Mode,
     state: State,
     terminal: Terminal,
@@ -101,8 +101,8 @@ impl<W: Write> Oxed<W> {
         writer.flush()?;
 
         Ok(Self {
-            _cwd: cwd,
-            _file: file,
+            cwd,
+            file,
             mode: Mode::Normal,
             state: State::Running,
             terminal,
@@ -293,6 +293,13 @@ impl<W: Write> Oxed<W> {
                 self.mode = Mode::Insert;
                 Ok(Action::None)
             }
+            // TODO change this to properly handle save
+            KeyCode::Char('s') => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.save()?;
+                }
+                Ok(Action::None)
+            }
             _ => {
                 let _res = View::render_error("Unhandled keybind");
                 Ok(Action::None)
@@ -401,6 +408,38 @@ impl<W: Write> Oxed<W> {
         }
 
         Ok(FrameBuffer::new((width, height), frame))
+    }
+
+    // TODO Handle new file where user should give a new filename
+    fn save(&self) -> io::Result<()> {
+        // TODO if filename is None ask user to give one
+        let path = self.file.as_ref().map_or_else(
+            || {
+                let mut path = self.cwd.clone();
+                path.push("new_file.txt");
+                path
+            },
+            Clone::clone,
+        );
+
+        let file = OpenOptions::new()
+            // Create if file does not exist
+            .create(true)
+            // Clear file content
+            .truncate(true)
+            //Open in edition
+            .write(true)
+            .open(path)?;
+
+        // Bufferise to write in 1 syscall
+        let mut writer = BufWriter::new(file);
+
+        for line in self.buffer.content() {
+            writeln!(writer, "{line}")?;
+        }
+        writer.flush()?;
+
+        Ok(())
     }
 }
 
