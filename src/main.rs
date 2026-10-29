@@ -9,6 +9,7 @@ use clap::Parser;
 mod buffer;
 mod cell;
 mod frame_buffer;
+mod layout;
 mod oxed;
 mod terminal;
 mod view;

@@ -33,7 +33,7 @@ enum State {
     Stop,
 }
 
-enum Mode {
+pub enum Mode {
     Normal,
     Insert,
     _Visual,
@@ -48,6 +48,37 @@ enum Action {
     Quit,
 }
 
+#[derive(Default)]
+pub struct Offset {
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Default)]
+pub struct Position {
+    x: usize,
+    y: usize,
+}
+
+pub struct Status {
+    /// Editor Mode
+    pub mode: Mode,
+    /// Current cursor position
+    pub cursor_position: Position,
+    // Might be needed to compute current line/col position
+    pub offset: Offset,
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Self {
+            mode: Mode::Normal,
+            cursor_position: Position::default(),
+            offset: Offset::default(),
+        }
+    }
+}
+
 /// Polling rate in ms
 const POLLING_RATE_AS_MS: u64 = 100;
 
@@ -56,17 +87,16 @@ pub struct Oxed<W: Write> {
     // Current working directory
     cwd: PathBuf,
     file: Option<PathBuf>,
-    mode: Mode,
     state: State,
     terminal: Terminal,
     buffer: Buffer,
     view: View,
     writer: W,
 
-    cursor_x: usize,
-    cursor_y: usize,
-    row_offset: usize,
-    col_offset: usize,
+    /// Oxed status
+    status: Status,
+    // row_offset: usize,
+    // col_offset: usize,
 }
 
 impl<W: Write> Oxed<W> {
@@ -103,16 +133,14 @@ impl<W: Write> Oxed<W> {
         Ok(Self {
             cwd,
             file,
-            mode: Mode::Normal,
             state: State::Running,
             terminal,
             buffer,
             view: View::new(None),
             writer,
-            cursor_x: usize::default(),
-            cursor_y: usize::default(),
-            row_offset: usize::default(),
-            col_offset: usize::default(),
+            status: Status::default(),
+            // row_offset: usize::default(),
+            // col_offset: usize::default(),
         })
     }
 
@@ -137,8 +165,16 @@ impl<W: Write> Oxed<W> {
                             self.view
                                 .handle_frame(next_frame, &mut self.writer, false)?;
 
-                            let x_relative_pos = self.cursor_x.saturating_sub(self.col_offset);
-                            let y_relative_pos = self.cursor_y.saturating_sub(self.row_offset);
+                            let x_relative_pos = self
+                                .status
+                                .cursor_position
+                                .x
+                                .saturating_sub(self.status.offset.col);
+                            let y_relative_pos = self
+                                .status
+                                .cursor_position
+                                .y
+                                .saturating_sub(self.status.offset.row);
 
                             // Puts cursor back in place after redraw
                             self.writer.queue(cursor::MoveTo(
@@ -148,8 +184,16 @@ impl<W: Write> Oxed<W> {
                             self.writer.flush()?;
                         }
                         Action::UpdateCursor => {
-                            let x_relative_pos = self.cursor_x.saturating_sub(self.col_offset);
-                            let y_relative_pos = self.cursor_y.saturating_sub(self.row_offset);
+                            let x_relative_pos = self
+                                .status
+                                .cursor_position
+                                .x
+                                .saturating_sub(self.status.offset.col);
+                            let y_relative_pos = self
+                                .status
+                                .cursor_position
+                                .y
+                                .saturating_sub(self.status.offset.row);
                             self.writer.execute(cursor::MoveTo(
                                 u16::try_from(x_relative_pos).unwrap_or(u16::MIN),
                                 u16::try_from(y_relative_pos).unwrap_or(u16::MIN),
@@ -177,7 +221,7 @@ impl<W: Write> Oxed<W> {
 
     fn handle_event(&mut self, event: &OxedEvent) -> io::Result<Action> {
         match event {
-            OxedEvent::Key(key) => match self.mode {
+            OxedEvent::Key(key) => match self.status.mode {
                 Mode::Normal => self.handle_normal_key(key),
                 Mode::Insert => self.handle_insert_key(key),
                 _ => {
@@ -205,28 +249,42 @@ impl<W: Write> Oxed<W> {
         match key.code {
             KeyCode::Char(c) => {
                 // Retrieve current line
-                if let Some(line) = self.buffer.content_mut().get_mut(self.cursor_y) {
-                    let insert_idx = self.cursor_x.min(line.chars().count());
+                if let Some(line) = self
+                    .buffer
+                    .content_mut()
+                    .get_mut(self.status.cursor_position.y)
+                {
+                    let insert_idx = self.status.cursor_position.x.min(line.chars().count());
 
                     let byte_idx = std::cmp::min(insert_idx, line.len());
 
                     // Insert and update cursor
                     line.insert(byte_idx, c);
-                    self.cursor_x = self.cursor_x.saturating_add(1);
+                    self.status.cursor_position.x = self.status.cursor_position.x.saturating_add(1);
 
                     // Handle automatic scroll
                     let (screen_width, _) = Terminal::size()?;
-                    if self.cursor_x >= self.col_offset.saturating_add(usize::from(screen_width)) {
-                        self.col_offset = self.col_offset.saturating_add(1);
+                    if self.status.cursor_position.x
+                        >= self
+                            .status
+                            .offset
+                            .col
+                            .saturating_add(usize::from(screen_width))
+                    {
+                        self.status.offset.col = self.status.offset.col.saturating_add(1);
                     }
                 }
                 Ok(Action::Redraw)
             }
             KeyCode::Backspace => {
-                if self.cursor_x > 0 {
-                    self.cursor_x = self.cursor_x.saturating_sub(1);
-                    if let Some(line) = self.buffer.content_mut().get_mut(self.cursor_y) {
-                        let remove_idx = self.cursor_x;
+                if self.status.cursor_position.x > 0 {
+                    self.status.cursor_position.x = self.status.cursor_position.x.saturating_sub(1);
+                    if let Some(line) = self
+                        .buffer
+                        .content_mut()
+                        .get_mut(self.status.cursor_position.y)
+                    {
+                        let remove_idx = self.status.cursor_position.x;
                         let byte_idx = line.char_indices().map(|(idx, _)| idx).nth(remove_idx);
 
                         if let Some(b_idx) = byte_idx {
@@ -235,8 +293,8 @@ impl<W: Write> Oxed<W> {
                     }
 
                     // Adjust col offset based on previous actions
-                    if self.cursor_x < self.col_offset {
-                        self.col_offset = self.col_offset.saturating_sub(1);
+                    if self.status.cursor_position.x < self.status.offset.col {
+                        self.status.offset.col = self.status.offset.col.saturating_sub(1);
                     }
                 }
                 Ok(Action::Redraw)
@@ -255,7 +313,7 @@ impl<W: Write> Oxed<W> {
             }
 
             KeyCode::Esc => {
-                self.mode = Normal;
+                self.status.mode = Normal;
                 Ok(Action::None)
             }
 
@@ -290,7 +348,7 @@ impl<W: Write> Oxed<W> {
                 Ok(self.compute_next_position(&Direction::Left, screen_width, screen_height))
             }
             KeyCode::Char('i') => {
-                self.mode = Mode::Insert;
+                self.status.mode = Mode::Insert;
                 Ok(Action::None)
             }
             // TODO change this to properly handle save
@@ -314,82 +372,121 @@ impl<W: Write> Oxed<W> {
         screen_height: usize,
     ) -> Action {
         match direction {
-            Direction::Up => {
-                self.cursor_y = self.cursor_y.saturating_sub(1);
+            Direction::Up => self.compute_move_up(),
+            Direction::Down => self.compute_move_down(screen_height),
+            Direction::Right => self.compute_move_right(screen_width),
+            Direction::Left => self.compute_move_left(),
+        }
+    }
 
-                let mut action = if let Some(line) = self.buffer.content().get(self.cursor_y) {
-                    self.cursor_x = std::cmp::min(line.chars().count(), self.cursor_x);
-                    if self.cursor_x < self.col_offset {
-                        self.col_offset = self.cursor_x;
+    fn compute_move_up(&mut self) -> Action {
+        self.status.cursor_position.y = self.status.cursor_position.y.saturating_sub(1);
+
+        let mut action =
+            if let Some(line) = self.buffer.content().get(self.status.cursor_position.y) {
+                self.status.cursor_position.x =
+                    std::cmp::min(line.chars().count(), self.status.cursor_position.x);
+                if self.status.cursor_position.x < self.status.offset.col {
+                    self.status.offset.col = self.status.cursor_position.x;
+                }
+                Action::Redraw
+            } else {
+                Action::UpdateCursor
+            };
+
+        action = if self.status.cursor_position.y < self.status.offset.row {
+            self.status.offset.row = self.status.offset.row.saturating_sub(1);
+            Action::Redraw
+        } else {
+            action
+        };
+
+        action
+    }
+
+    fn compute_move_down(&mut self, screen_height: usize) -> Action {
+        if self
+            .status
+            .cursor_position
+            .y
+            .checked_add(1)
+            .is_some_and(|y| y < self.buffer.len())
+        {
+            self.status.cursor_position.y = self
+                .status
+                .cursor_position
+                .y
+                .checked_add(1)
+                .unwrap_or(self.buffer.len());
+
+            let mut action =
+                if let Some(line) = self.buffer.content().get(self.status.cursor_position.y) {
+                    self.status.cursor_position.x =
+                        std::cmp::min(line.chars().count(), self.status.cursor_position.x);
+                    if self.status.cursor_position.x < self.status.offset.col {
+                        self.status.offset.col = self.status.cursor_position.x;
                     }
                     Action::Redraw
                 } else {
-                    Action::None
+                    Action::UpdateCursor
                 };
 
-                action = if self.cursor_y < self.row_offset {
-                    self.row_offset = self.row_offset.saturating_sub(1);
-                    Action::Redraw
-                } else {
-                    action
-                };
-
-                return action;
-            }
-            Direction::Down => {
-                if self
-                    .cursor_y
+            action = if self.status.cursor_position.y
+                >= self.status.offset.row.saturating_add(screen_height)
+            {
+                self.status.offset.row = self
+                    .status
+                    .offset
+                    .row
                     .checked_add(1)
-                    .is_some_and(|y| y < self.buffer.len())
-                {
-                    self.cursor_y = self.cursor_y.checked_add(1).unwrap_or(self.buffer.len());
+                    .unwrap_or(self.buffer.len());
+                Action::Redraw
+            } else {
+                action
+            };
 
-                    let mut action = if let Some(line) = self.buffer.content().get(self.cursor_y) {
-                        self.cursor_x = std::cmp::min(line.chars().count(), self.cursor_x);
-                        if self.cursor_x < self.col_offset {
-                            self.col_offset = self.cursor_x;
-                        }
-                        Action::Redraw
-                    } else {
-                        Action::None
-                    };
+            return action;
+        }
+        Action::None
+    }
 
-                    action = if self.cursor_y >= self.row_offset.saturating_add(screen_height) {
-                        self.row_offset =
-                            self.row_offset.checked_add(1).unwrap_or(self.buffer.len());
-                        Action::Redraw
-                    } else {
-                        action
-                    };
+    fn compute_move_right(&mut self, screen_width: usize) -> Action {
+        if self
+            .status
+            .cursor_position
+            .x
+            .checked_add(1)
+            .is_some_and(|x| {
+                x <= self
+                    .buffer
+                    .line(self.status.cursor_position.y)
+                    .unwrap_or(&String::new())
+                    .chars()
+                    .count()
+            })
+        {
+            self.status.cursor_position.x = self
+                .status
+                .cursor_position
+                .x
+                .checked_add(1)
+                .unwrap_or_default();
 
-                    return action;
-                }
+            if self.status.cursor_position.x >= self.status.offset.col.saturating_add(screen_width)
+            {
+                self.status.offset.col = self.status.offset.col.checked_add(1).unwrap_or_default();
+                return Action::Redraw;
             }
-            Direction::Right => {
-                if self.cursor_x.checked_add(1).is_some_and(|x| {
-                    x <= self
-                        .buffer
-                        .line(self.cursor_y)
-                        .unwrap_or(&String::new())
-                        .chars()
-                        .count()
-                }) {
-                    self.cursor_x = self.cursor_x.checked_add(1).unwrap_or_default();
+        }
+        Action::UpdateCursor
+    }
 
-                    if self.cursor_x >= self.col_offset.saturating_add(screen_width) {
-                        self.col_offset = self.col_offset.checked_add(1).unwrap_or_default();
-                        return Action::Redraw;
-                    }
-                }
-            }
-            Direction::Left => {
-                self.cursor_x = self.cursor_x.saturating_sub(1);
+    const fn compute_move_left(&mut self) -> Action {
+        self.status.cursor_position.x = self.status.cursor_position.x.saturating_sub(1);
 
-                if self.cursor_x < self.col_offset {
-                    self.col_offset = self.col_offset.saturating_sub(1);
-                    return Action::Redraw;
-                }
-            }
+        if self.status.cursor_position.x < self.status.offset.col {
+            self.status.offset.col = self.status.offset.col.saturating_sub(1);
+            return Action::Redraw;
         }
         Action::UpdateCursor
     }
@@ -400,10 +497,15 @@ impl<W: Write> Oxed<W> {
 
         let mut frame: Vec<Cell> = vec![Cell::new(' '); usize::from(height.saturating_mul(width))];
 
-        let visible_lines = self.buffer.content().iter().skip(self.row_offset).take(h);
+        let visible_lines = self
+            .buffer
+            .content()
+            .iter()
+            .skip(self.status.offset.row)
+            .take(h);
 
         for (y, line) in visible_lines.enumerate() {
-            let visible_chars = line.chars().skip(self.col_offset).take(w);
+            let visible_chars = line.chars().skip(self.status.offset.col).take(w);
 
             for (x, symbol) in visible_chars.enumerate() {
                 let idx = y.saturating_mul(w).saturating_add(x);
@@ -416,7 +518,8 @@ impl<W: Write> Oxed<W> {
         Ok(FrameBuffer::new((width, height), frame))
     }
 
-    // TODO Handle new file where user should give a new filename
+    // TODO Handle new file
+    // when file isnt specified at oxed init, we should ask user to provide a file name
     fn save(&self) -> io::Result<()> {
         // TODO if filename is None ask user to give one
         let path = self.file.as_ref().map_or_else(
